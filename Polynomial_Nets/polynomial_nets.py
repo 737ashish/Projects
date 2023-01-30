@@ -48,3 +48,47 @@ class CP_L3(nn.Module):
         x3 = self.layer_U3(z)*x2 + x2 
         x = self.layer_C(x3)
         return x
+
+class CP_L3_sparse(nn.Module):
+    def __init__(self, d, k, o):
+        super(CP_L3_sparse, self).__init__()
+        
+        self.layer_U1 = nn.Parameter(torch.randn(k, d))  
+        self.layer_U2 = nn.Parameter(torch.tril(torch.randn(k, d)))  
+        self.layer_U3 = nn.Parameter(torch.tril(torch.randn(k, d)))  
+        self.mask = torch.tril(torch.ones_like(self.layer_U2))
+        self.layer_C = nn.Linear(k, o)   
+        self.input_dimension = d 
+        self.rank = k
+        self.output_dimension = o 
+
+
+    def forward(self, z):
+        z = z.reshape(-1, self.input_dimension)
+        x1 = torch.matmul(z, self.layer_U1.T)
+        x2 = torch.matmul(z, (self.mask * self.layer_U2).T) + x1
+        x3 = torch.matmul(z, (self.mask * self.layer_U3).T) + x2
+        x = self.layer_C(x3)
+        return x
+
+class CP_L3_sparse_1(nn.Module):
+    def __init__(self, d, k, o):
+        super(CP_L3_sparse_1, self).__init__()
+        
+        self.layer_U1 = nn.Parameter(torch.tril(torch.randn(k, d)))     
+        self.layer_U2 = nn.Parameter(torch.tril(torch.randn(k, d)))  
+        self.layer_U3 = nn.Parameter(torch.tril(torch.randn(k, d)))  
+        self.mask = torch.tril(torch.ones_like(self.layer_U1))
+        self.layer_C = nn.Linear(k, o)   
+        self.input_dimension = d 
+        self.rank = k
+        self.output_dimension = o 
+
+
+    def forward(self, z):
+        z = z.reshape(-1, self.input_dimension)
+        x1 = torch.matmul(z, (self.mask * self.layer_U1).T)
+        x2 = torch.matmul(z, (self.mask * self.layer_U2).T) + x1
+        x3 = torch.matmul(z, (self.mask * self.layer_U3).T) + x2
+        x = self.layer_C(x3)
+        return x
