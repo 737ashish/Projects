@@ -92,3 +92,27 @@ class CP_L3_sparse_1(nn.Module):
         x3 = torch.matmul(z, (self.mask * self.layer_U3).T) + x2
         x = self.layer_C(x3)
         return x
+
+class CP_L3_sparse_outer(nn.Module):
+    def __init__(self, d, o):
+        super(CP_L3_sparse_outer, self).__init__()
+        
+        self.layer_U1 = nn.Parameter(torch.randn(d))  
+        self.layer_U2 = nn.Parameter(torch.randn(d))
+        self.layer_U3 = nn.Parameter(torch.randn(d))
+        self.layer_C = nn.Linear(d, o)   
+        self.input_dimension = d 
+        self.output_dimension = o 
+
+
+    def forward(self, z):
+        z = z.reshape(-1, self.input_dimension)
+        x1 = self.layer_U1 * z
+        x2 = self.layer_U2 * z
+        x3 = self.layer_U3 * z
+        x_outer1 = torch.outer(x2, x1)
+        x_12 = torch.sum(x_outer1, 1)
+        x_outer2 = torch.outer(x3, x_12)
+        x_123 = torch.sum(x_outer2, 1)
+        x = self.layer_C(x_123)
+        return x
