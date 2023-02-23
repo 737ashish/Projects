@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from polynomial_nets import CP_L3, CP_C3, NCP_L3, CP_CT3
+from polynomial_nets import CP_L3, CP_C3, NCP_L3, CP_CT3, Chebyshev_L3
 
 def initialize_weights(model):
   for m in model.modules():
@@ -50,10 +50,21 @@ def gradient_penalty_C(critic, real, fake, device="cpu"):
     return gradient_penalty
 
 
+class Generator_Cheby_L3(nn.Module):
+  def __init__(self, z_dim, output, rank):
+    super(Generator_Cheby_L3, self).__init__()
+    self.gen = nn.Sequential(Chebyshev_L3(z_dim, rank, output), nn.Tanh())
+
+
+  def forward(self, z):
+    return  self.gen(z)
+
+
+
 class Generator_CP_L3(nn.Module):
   def __init__(self, z_dim, output, rank):
     super(Generator_CP_L3, self).__init__()
-    self.gen = nn.Sequential(CP_L3(z_dim, rank, output), nn.Sigmoid())
+    self.gen = nn.Sequential(CP_L3(z_dim, rank, output), nn.Tanh())
 
 
   def forward(self, z):
@@ -80,7 +91,7 @@ class Generator_CP_C3(nn.Module):
 class Generator_NCP_L3(nn.Module):
   def __init__(self, z_dim, output, rank, LHP):
     super(Generator_NCP_L3, self).__init__()
-    self.gen = NCP_L3(z_dim, rank, output, LHP)
+    self.gen = nn.Sequential(NCP_L3(z_dim, rank, output, LHP), nn.Tanh())
 
 
   def forward(self, z):
@@ -123,19 +134,18 @@ class Poly_GeneratorC3(nn.Module):
     x = self.layer_C(in_C)
     return x
 
-class Discriminator(nn.Module):
+class Discriminator32(nn.Module):
   def __init__(self, channels_img, features_d):
-    super(Discriminator, self).__init__()
+    super(Discriminator32, self).__init__()
     self.disc = nn.Sequential(
       # Input: N x channels_img x 64 x 64
       nn.Conv2d(
         channels_img, features_d, kernel_size=4, stride=2, padding=1
       ),
       nn.LeakyReLU(0.2),
-      self._block(features_d, features_d*2, 4, 2, 1), # 16 x 16
-      self._block(features_d*2, features_d*4, 4, 2, 1), # 8 x 8
-      self._block(features_d*4, features_d*8, 4, 2, 1), # 4 x 4
-      nn.Conv2d(features_d*8, 1, kernel_size=4, stride=2, padding=0), # 1 x 1
+      self._block(features_d, features_d*2, 3, 1, 1), # 16 x 16
+      self._block(features_d*2, features_d*4, 4, 2, 1), # 4 x 4
+      nn.Conv2d(features_d*4, 1, kernel_size=4, stride=2, padding=1), # 1 x 1
             
     )
 
@@ -156,3 +166,36 @@ class Discriminator(nn.Module):
 
   def forward(self, x):
     return self.disc(x)
+
+class Generator32(nn.Module):
+  def __init__(self, z_dim, channels_img, features_g):
+    super(Generator32, self).__init__()
+    self.gen = nn.Sequential(
+      # Input: N x z_dim x 1 x 1
+      self._block(z_dim, features_g*16, 4, 1, 0), # N x f_g*16 x 4 x 4
+      self._block(features_g*16, features_g*8, 4, 2, 1), # 8 x 8
+      self._block(features_g*8, features_g*2, 4, 2, 1), #32 x 32
+      nn.ConvTranspose2d(
+        features_g*2, channels_img, kernel_size=4, stride=2, padding=1,
+    ),
+    nn.Tanh(), #[-1, 1] 
+
+    )
+
+  def _block(self, in_channels, out_channels, kernel_size, stride, padding):
+    return nn.Sequential(
+      nn.ConvTranspose2d(
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        bias=False,
+      ),
+      #nn.BatchNorm2d(out_channels),
+      nn.ReLU(),
+
+    )
+
+  def forward(self, x):
+    return self.gen(x)

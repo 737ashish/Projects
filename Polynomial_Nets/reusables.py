@@ -41,4 +41,33 @@ for name, p in model.named_parameters():
         p.grad = None 
     
     
+
     
+h1 = model.encoder(images[0])
+z1, mu1, logvar1 = model.bottleneck(h1.to(device))
+z1_1 = model.fc3(z1)
+        #print('z.shape', z.shape)
+r1 = model.decoder(z1_1)
+h2 = model_s.encoder(images[0])
+z2, mu2, logvar2 = model_s.bottleneck(h2.to(device))
+z2_1 = model_s.fc3(z2)
+        #print('z.shape', z.shape)
+r = model_s.decoder(z2_1)
+c = model_s.encoder.layer_c.to(torch.float64)
+r, m, l = model(images)
+z_s = images.reshape(-1, model_s.encoder.input_dimension)
+T0_s = model_s.encoder.layer_a
+T1_s = model_s.encoder.layer_b(z_s)
+T2_s = (2 * torch.matmul(z_s, (model_s.encoder.mask * model_s.encoder.layer_c).T) * T1_s) - T0_s
+T3_s = (2 * torch.matmul(z_s, (model_s.encoder.mask * model_s.encoder.layer_c).T) * T2_s) - T1_s
+x_s = model_s.encoder.layer_C(T3_s)
+mask = model_s.encoder.mask
+z = images.reshape(-1, model.encoder.input_dimension)
+T0 = model.encoder.layer_a
+T1 = model.encoder.layer_b(z)
+T2 = 2 * model.encoder.layer_c(z) * T1 - T0
+T3 = 2 * model.encoder.layer_d(z) * T2 - T1
+x = model.encoder.layer_C(T3)
+sparse_int = torch.matmul(z_s, (model_s.encoder.mask * model_s.encoder.layer_c).T)
+c_s = model_s.encoder.layer_c
+c = model.encoder.layer_c.weight.to(torch.float64)

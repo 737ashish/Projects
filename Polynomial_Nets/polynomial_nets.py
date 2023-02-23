@@ -2,6 +2,80 @@ import torch
 import torch.nn as nn
 
 
+class Chebyshev_L3(nn.Module):
+    def __init__(self, d, k, o):
+        super(Chebyshev_L3, self).__init__()
+        
+        self.layer_a = torch.nn.Parameter(torch.randn(k))
+        self.layer_b = nn.Linear(d, k, bias=False)
+        #self.layer_c = nn.Linear(d, k, bias=False)
+        #self.layer_d = nn.Linear(d, k, bias=False)
+
+        self.layer_C = nn.Linear(k, o)   
+        self.input_dimension = d 
+        self.rank = k
+        self.output_dimension = o 
+
+
+    def forward(self, z):
+        z = z.reshape(-1, self.input_dimension)
+        T0 = self.layer_a 
+        T1 = self.layer_b(z)
+        T2 = 2 * self.layer_b(z) * T1 - T0
+        T3 = 2 * self.layer_b(z) * T2 - T1
+        x = self.layer_C(T3)
+        return x
+
+class Chebyshev_L3_sparse(nn.Module):
+    def __init__(self, d, k, o):
+        super(Chebyshev_L3_sparse, self).__init__()
+
+        self.layer_a = torch.nn.Parameter(torch.randn(k))
+        self.layer_b = nn.Linear(d, k, bias=False)
+        self.layer_c = nn.Parameter(torch.tril(nn.Linear(d, k, bias=False).weight))
+        self.layer_d = nn.Parameter(torch.tril(nn.Linear(d, k, bias=False).weight))
+        self.mask = torch.tril(torch.ones_like(self.layer_c))        
+        self.layer_C = nn.Linear(k, o)   
+        self.input_dimension = d 
+        self.rank = k
+        self.output_dimension = o 
+
+    def forward(self, z):
+        z = z.reshape(-1, self.input_dimension)
+        T0 = self.layer_a
+        T1 = self.layer_b(z)
+        T2 = (2 * torch.matmul(z, (self.mask * self.layer_c).T) * T1) - T0
+        T3 = (2 * torch.matmul(z, (self.mask * self.layer_d).T) * T2) - T1
+        x = self.layer_C(T3)
+        return x
+
+
+class NCP_L3_skip(nn.Module):
+  def __init__(self, d, k, o, w):
+    super(NCP_L3, self).__init__()
+    self.layer_b1 = torch.nn.Parameter(torch.randn(w))
+    self.layer_b2 = torch.nn.Parameter(torch.randn(w))
+    self.layer_b3 = torch.nn.Parameter(torch.randn(w))
+    self.layer_A1 = nn.Linear(d, k, bias=False)
+    self.layer_A2 = nn.Linear(d, k, bias=False)
+    self.layer_A3 = nn.Linear(d, k, bias=False)
+    self.layer_B1 = nn.Linear(w, k, bias=False)
+    self.layer_B2 = nn.Linear(w, k, bias=False)
+    self.layer_B3 = nn.Linear(w, k, bias=False)
+    self.layer_S2 = nn.Linear(k, k, bias=False)
+    self.layer_S3 = nn.Linear(k, k, bias=False)
+    self.layer_C = nn.Linear(k, o)
+   #[-1, 1] 
+
+
+  def forward(self, z):
+    x1 = self.layer_A1(z) * self.layer_B1(self.layer_b1)
+    x2 = self.layer_A2(z) * (self.layer_S2(x1) + self.layer_B2(self.layer_b2)) + x1
+    x3 = self.layer_A3(z) * (self.layer_S3(x2) + self.layer_B3(self.layer_b3)) + x2
+    x = self.layer_C(x3)
+   
+    return x
+
 class NCP_L3(nn.Module):
   def __init__(self, d, k, o, w):
     super(NCP_L3, self).__init__()
