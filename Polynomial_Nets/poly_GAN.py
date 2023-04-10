@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from polynomial_nets import CP_L3, CP_C3, NCP_L3, CP_CT3, Chebyshev_L3
+from polynomial_nets import CP_L3, CP_C3, NCP_L3, CP_CT3, Chebyshev_L3, Attention
 
 def initialize_weights(model):
   for m in model.modules():
@@ -49,6 +49,15 @@ def gradient_penalty_C(critic, real, fake, device="cpu"):
     gradient_penalty = torch.mean((gradient_norm -1) ** 2)
     return gradient_penalty
 
+
+class Generator_attention(nn.Module):
+  def __init__(self, z_dim, output, rank):
+    super(Generator_attention, self).__init__()
+    self.gen = nn.Sequential(Attention(z_dim, rank, output), nn.Tanh())
+
+
+  def forward(self, z):
+    return  self.gen(z)
 
 class Generator_Cheby_L3(nn.Module):
   def __init__(self, z_dim, output, rank):

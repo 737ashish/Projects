@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from polynomial_nets import CP_L3, CP_L3_sparse, CP_L3_sparse_outer, CP_L3_sparse_L, CP_L3_sparse_U, Chebyshev_L3, Chebyshev_L3_sparse
+from polynomial_nets import CP_L3, CP_L3_sparse, CP_L3_sparse_outer, CP_L3_sparse_L, CP_L3_sparse_U, Chebyshev_L3, Chebyshev_L3_sparse, Chebyshev_L3_sparseD32, Chebyshev_L3_sparseU32, Chebyshev_sparse_kernelD, Chebyshev_sparse_kernelU, Chebyshev_L3_sparseD32_stack, Attention
+from polynomial_nets import ProdCheby_NL, ProdCheby_NL2
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 device = 'cpu'
@@ -291,6 +292,146 @@ class VAE_Cheby_L3_sparse(nn.Module):
         return self.bottleneck(self.encoder(x))[0]
 
     def forward(self, x):
+        h = self.encoder(x)
+        z, mu, logvar = self.bottleneck(h.to(device))
+        z = self.fc3(z)
+        #print('z.shape', z.shape)
+        return self.decoder(z), mu, logvar
+    
+class VAE_Cheby3_kernel32(nn.Module):
+    def __init__(self, image_size=32*32, h_dim=100, z_dim=4, rank=100):
+        super(VAE_Cheby3_kernel32, self).__init__()
+        self.encoder = Chebyshev_sparse_kernelD(image_size, h_dim).to(device)   
+        self.fc1 = nn.Linear(h_dim, z_dim)
+        self.fc2 = nn.Linear(h_dim, z_dim)
+        self.fc3 = nn.Linear(z_dim, h_dim)
+        
+        self.decoder = nn.Sequential(Chebyshev_L3(h_dim, rank, image_size * image_size).to(device), nn.Sigmoid())
+        #self.decoder = nn.Sequential(Chebyshev_L3_sparseU32(h_dim, image_size).to(device), nn.Sigmoid())
+        
+        
+    def reparameterize(self, mu, logvar):
+        std = logvar.mul(0.5).exp_()
+        # return torch.normal(mu, std)
+        esp = torch.randn(*mu.size()).to(device)
+        z = mu + std * esp
+        return z.to(device)
+    
+    def bottleneck(self, h):
+        mu, logvar = self.fc1(h), self.fc2(h)
+        z = self.reparameterize(mu.to(device), logvar.to(device))
+        return z, mu, logvar
+        
+    def representation(self, x):
+        return self.bottleneck(self.encoder(x))[0]
+
+    def forward(self, x):
+        
+        h = self.encoder(x)
+        z, mu, logvar = self.bottleneck(h.to(device))
+        z = self.fc3(z)
+        #print('z.shape', z.shape)
+        return self.decoder(z), mu, logvar
+    
+class VAE_Cheby3_kernelDU(nn.Module):
+    def __init__(self, image_size=32*32, h_dim=100, z_dim=4, rank=200):
+        super(VAE_Cheby3_kernelDU, self).__init__()
+        self.encoder = Chebyshev_L3_sparseD32_stack(image_size, h_dim).to(device)   
+        self.fc1 = nn.Linear(h_dim, z_dim)
+        self.fc2 = nn.Linear(h_dim, z_dim)
+        self.fc3 = nn.Linear(z_dim, h_dim)
+        
+        self.decoder = nn.Sequential(Chebyshev_L3(h_dim, rank, image_size * image_size).to(device), nn.Sigmoid())
+        #self.decoder = nn.Sequential(Chebyshev_sparse_kernelU(h_dim, image_size).to(device), nn.Sigmoid())
+        
+        
+    def reparameterize(self, mu, logvar):
+        std = logvar.mul(0.5).exp_()
+        # return torch.normal(mu, std)
+        esp = torch.randn(*mu.size()).to(device)
+        z = mu + std * esp
+        return z.to(device)
+    
+    def bottleneck(self, h):
+        mu, logvar = self.fc1(h), self.fc2(h)
+        z = self.reparameterize(mu.to(device), logvar.to(device))
+        return z, mu, logvar
+        
+    def representation(self, x):
+        return self.bottleneck(self.encoder(x))[0]
+
+    def forward(self, x):
+        
+        h = self.encoder(x)
+        z, mu, logvar = self.bottleneck(h.to(device))
+        z = self.fc3(z)
+        #print('z.shape', z.shape)
+        return self.decoder(z), mu, logvar
+    
+class VAE_attention(nn.Module):
+    def __init__(self, image_size=32*32, h_dim=100, z_dim=4, rank=200):
+        super(VAE_attention, self).__init__()
+        self.encoder = Attention(image_size, rank, h_dim).to(device)   
+        self.fc1 = nn.Linear(h_dim, z_dim)
+        self.fc2 = nn.Linear(h_dim, z_dim)
+        self.fc3 = nn.Linear(z_dim, h_dim)
+        
+        self.decoder = nn.Sequential(Chebyshev_L3(h_dim, rank, image_size).to(device), nn.Sigmoid())
+        #self.decoder = nn.Sequential(Chebyshev_sparse_kernelU(h_dim, image_size).to(device), nn.Sigmoid())
+        
+        
+    def reparameterize(self, mu, logvar):
+        std = logvar.mul(0.5).exp_()
+        # return torch.normal(mu, std)
+        esp = torch.randn(*mu.size()).to(device)
+        z = mu + std * esp
+        return z.to(device)
+    
+    def bottleneck(self, h):
+        mu, logvar = self.fc1(h), self.fc2(h)
+        z = self.reparameterize(mu.to(device), logvar.to(device))
+        return z, mu, logvar
+        
+    def representation(self, x):
+        return self.bottleneck(self.encoder(x))[0]
+
+    def forward(self, x):
+        
+        h = self.encoder(x)
+        z, mu, logvar = self.bottleneck(h.to(device))
+        z = self.fc3(z)
+        #print('z.shape', z.shape)
+        return self.decoder(z), mu, logvar
+    
+class VAE_ProdCheby(nn.Module):
+    def __init__(self, image_size = 28*28, encoder_layer_params = [], encoder_degrees = [], decoder_layer_params = [], decoder_degrees = [], h_dim = 100, z_dim=4, activation = nn.Identity()):
+        super(VAE_ProdCheby, self).__init__()
+        self.encoder = ProdCheby_NL(encoder_layer_params, encoder_degrees, h_dim, activation=activation).to(device)   
+        self.fc1 = nn.Linear(h_dim, z_dim)
+        self.fc2 = nn.Linear(h_dim, z_dim)
+        self.fc3 = nn.Linear(z_dim, h_dim)
+        
+        self.decoder = nn.Sequential(ProdCheby_NL(decoder_layer_params, decoder_degrees, image_size, activation=activation).to(device), nn.Sigmoid())
+        #self.decoder = nn.Sequential(Chebyshev_sparse_kernelU(h_dim, image_size).to(device), nn.Sigmoid())
+        
+        
+    def reparameterize(self, mu, logvar):
+        std = logvar.mul(0.5).exp_()
+        # return torch.normal(mu, std)
+        esp = torch.randn(*mu.size()).to(device)
+        z = mu + std * esp
+        return z.to(device)
+    
+    def bottleneck(self, h):
+        mu, logvar = self.fc1(h), self.fc2(h)
+        z = self.reparameterize(mu.to(device), logvar.to(device))
+        return z, mu, logvar
+        
+    def representation(self, x):
+        return self.bottleneck(self.encoder(x))[0]
+
+    def forward(self, x):
+        
         h = self.encoder(x)
         z, mu, logvar = self.bottleneck(h.to(device))
         z = self.fc3(z)

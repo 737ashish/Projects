@@ -71,3 +71,54 @@ x = model.encoder.layer_C(T3)
 sparse_int = torch.matmul(z_s, (model_s.encoder.mask * model_s.encoder.layer_c).T)
 c_s = model_s.encoder.layer_c
 c = model.encoder.layer_c.weight.to(torch.float64)
+
+test_dataset, target_scaler_test = generate_dataset_uqtf(my_testfun, N, MinMaxScaler())
+#fig, axs = plt.subplots(3, 3, sharex=True, sharey=True)
+fig, axs = plt.subplots(3, 3)
+model_name = ['MLP', 'Canonical', 'Chebyshev']
+Optimizer_name = ['Adam', 'SGD', 'Rrop']
+for i in range(len(models)):
+    for j in range(len(optimizer_list)):
+        model = ensemble_array[i,j].to('cpu')
+        outputs = model(test_dataset[:, :IN_DIM].to('cpu')).to('cpu').detach().numpy()
+        outputs = target_scaler.inverse_transform(outputs)
+        test_target = test_dataset[:, IN_DIM:].to('cpu').detach().numpy()
+        test_target = target_scaler.inverse_transform(test_target)
+        i_p = i 
+        j_p = j 
+        #plt.subplot(3, 3, (i_p * 3) + j_p + 1)
+        
+        #plt.hist(test_target, bins="auto", color="#8da0cb", alpha = 0.9)
+        #plt.hist(outputs, bins='auto', alpha = 0.5)
+
+        axs[i,j].hist(test_target, bins="auto", color="#8da0cb", alpha = 0.9)
+        axs[i,j].hist(outputs, bins='auto', alpha = 0.5)
+        axs[i,j].grid()
+        axs[i,j].set_xlim(-300, 300)
+        axs[i,j].set_title(model_name[i])
+        #axs[i,j].xlabel("$\mathcal{M}(\mathbf{X})$")
+        #axs[i,j].ylabel("Counts [-]")
+        #axs[i,j].gcf().set_dpi(150);
+
+model = ensemble_array[0,2].to('cpu')
+outputs = model(test_dataset[:, :IN_DIM].to('cpu')).to('cpu').detach().numpy()
+outputs = target_scaler.inverse_transform(outputs)
+test_target = test_dataset[:, IN_DIM:].to('cpu').detach().numpy()
+test_target = target_scaler.inverse_transform(test_target)
+plt.hist(test_target, bins="auto", color="#8da0cb", alpha = 0.9)
+plt.hist(outputs, bins='auto', alpha = 0.9)
+
+test_dataset, target_scaler_test = generate_dataset_uqtf(my_testfun, N, MinMaxScaler())
+for model in models:
+    model.to('cpu')
+    np.random.seed(41)
+    outputs1 = model(test_dataset[:, :IN_DIM].to('cpu')).to('cpu').detach().numpy()
+    test_target = test_dataset[:, IN_DIM:].to('cpu').detach().numpy()
+    plt.hist(test_target, bins="auto", color="#8da0cb")
+    plt.hist(outputs1, bins='auto')
+    plt.grid()
+    plt.xlabel("$\mathcal{M}(\mathbf{X})$")
+    plt.ylabel("Counts [-]")
+    plt.gcf().set_dpi(150);
+
+list(zip(*ind))
