@@ -122,3 +122,27 @@ for model in models:
     plt.gcf().set_dpi(150);
 
 list(zip(*ind))
+
+if __name__ == "__main__":
+
+
+	Module = __import__('polynomial_nets_legendre')
+
+	func = getattr(Module, 'Legendre')
+
+	fun_list = [getattr(Module, i)(*arguments) for i in classes]
+
+	res = func(*arguments)
+
+	print(res)
+        
+inspect.getmembers(sys.modules['polynomial_nets_legendre'])
+
+tf = [name for name, cls_obj in inspect.getmembers(sys.modules['test_functions']) if inspect.isfunction(cls_obj)]
+print(tf)
+
+Module = __import__('test_functions')
+getattr(Module, 'runge1D')(2)
+
+classes = [cls_name for cls_name, cls_obj in inspect.getmembers(sys.modules['polynomial_nets_legendre']) if inspect.isclass(cls_obj)]
+print(classes)

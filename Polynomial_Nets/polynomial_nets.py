@@ -1,50 +1,9 @@
 import torch
 import torch.nn as nn
+import poly_utils as ut
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 #device = 'cpu'
-
-def weight_matrix_k4s2(image_size):
-    
-    kernel_width = 16
-    kernel_height = kernel_width
-    image_width = image_size
-    image_height = image_width
-    stride = 2
-    width_steps = int((image_width - kernel_width)/stride)
-    height_steps = int((image_height - kernel_height)/stride)
-
-    base = torch.arange(0, kernel_width)
-    base_new = base.repeat(kernel_height)
-    addition = torch.arange(0, kernel_width) * image_width
-    addition_new  = addition.repeat_interleave(kernel_height)
-    index_1 = addition_new + base_new
-
-    index_width = index_1.repeat(width_steps + 1)
-    addition_width = stride * torch.arange(0, width_steps + 1)
-    addition_width = addition_width.repeat_interleave(kernel_height * kernel_width)
-    index_row = index_width + addition_width
-
-    index_column = index_row.repeat(height_steps + 1)
-    addition_height = stride * image_width * torch.arange(0, height_steps + 1)
-    addition_height_rep = addition_height.repeat_interleave(kernel_height * kernel_width * (height_steps + 1))
-    index_final = index_column + addition_height_rep
-
-    stack = torch.arange(0, (height_steps + 1) * (width_steps + 1)).repeat_interleave(kernel_height * kernel_width)
-    indices = torch.stack((stack, index_final), dim=1)
-
-    W_in = image_height * image_width
-    W_out = (height_steps + 1) * (width_steps + 1)
-    #print(W_out, W_in)
-    W = torch.zeros([W_out, W_in], dtype=torch.float32)
-    values = torch.nn.Linear(indices.shape[0], 1).weight.to(torch.float32)[0]
-    W = W.index_put_(tuple(indices.t()), values)
-
-    mask = torch.zeros([W_out, W_in], dtype=torch.float32)
-    values_m = torch.ones_like(values)
-    mask = mask.index_put_(tuple(indices.t()), values_m)
-
-    return W, mask
 
 class Attention(nn.Module):
     def __init__(self, d, k, o):
@@ -409,7 +368,78 @@ class Chebyshev(nn.Module):
                 out_list = out_list + [out1]
         x = self.layer_C(out_list[self.degree])
         return x
+    
+class Chebyshev_norm(nn.Module):
+    def __init__(self, degree, d, k, o):
+        super(Chebyshev_norm, self).__init__()        
+     
+        self.input_dimension = d 
+        self.rank = k
+        self.output_dimension = o 
+        self.degree = int(degree)
+        self.T0 = nn.Parameter(torch.ones(k))
+        #self.register_buffer('T0', torch.ones(k))
+        for i in range(1, self.degree + 1):
+            setattr(self, 'T{}'.format(i), nn.Parameter(ut.Norm_param(k,d)))
 
+        self.layer_C = nn.Linear(self.rank, self.output_dimension) 
+        #self.beta = nn.Parameter(nn.Linear(o, 1).weight.to(torch.float32)[0])
+
+
+    def forward(self, z):
+        z = z.reshape(-1, self.input_dimension)
+        out0 = self.T0
+        out1 = torch.matmul(z, (self.T1).T)
+        out_list = [out0] + [out1]
+        for i in range(2, self.degree + 1, 2):
+            Ti = getattr(self, 'T{}'.format(i))
+            Ti = Ti/(torch.sum(Ti, dim=1)).reshape(-1,1)                     
+            out0 = torch.matmul(z, 2*Ti.T) * out1 - out0
+            out_list = out_list + [out0]
+            if i == self.degree:
+                x = self.layer_C(out_list[self.degree])
+                return x
+            else:
+                Ti = getattr(self, 'T{}'.format(i + 1))
+                Ti = Ti/(torch.sum(Ti, dim=1)).reshape(-1,1)
+                out1 = torch.matmul(z, 2*Ti.T) * out0 - out1
+                out_list = out_list + [out1]
+        x = self.layer_C(out_list[self.degree])
+        return x
+    
+class Legendre(nn.Module):
+    def __init__(self, degree, d, k, o):
+        super(Legendre, self).__init__()        
+     
+        self.input_dimension = d 
+        self.rank = k
+        self.output_dimension = o 
+        self.degree = int(degree)
+        self.T0 = nn.Parameter(torch.ones(k))
+        for i in range(1, self.degree + 1):
+            setattr(self, 'T{}'.format(i), nn.Parameter(ut.Norm_param(k,d)))
+
+        self.layer_C = nn.Parameter(ut.Norm_param(o,k))
+        self.beta = nn.Parameter(nn.Linear(o, 1).weight.to(torch.float32)[0])
+
+
+    def forward(self, z):
+        z = z.reshape(-1, self.input_dimension)
+        out0 = self.T0
+        out1 = torch.matmul(z, (self.T1).T)
+        out_list = [out0] + [out1]
+        for i in range(2, self.degree + 1, 2):
+            out0 = torch.matmul(z, ((2*i - 1)/(i))*getattr(self, 'T{}'.format(i)).T) * out1 - ((i - 1)/(i))*out0
+            out_list = out_list + [out0]
+            if i == self.degree:
+                x = torch.matmul(out_list[self.degree], self.layer_C.T) 
+                return x
+            else:
+                j = i + 1
+                out1 = torch.matmul(z, ((2*j - 1)/(j))*getattr(self, 'T{}'.format(i + 1)).T) * out0 - ((j - 1)/(j))*out1
+                out_list = out_list + [out1]
+        x = torch.matmul(out_list[self.degree], self.layer_C.T) 
+        return x
 
 class NCP_L3_skip(nn.Module):
   def __init__(self, d, k, o, w):
@@ -522,6 +552,31 @@ class CP_sparse_LU(nn.Module):
                 x = self.layer_C(out)
                 return x
             out = torch.matmul(z, (self.mask1 * getattr(self, 'U{}'.format(i+1))).T) * out + out
+        x = self.layer_C(out)
+        return x
+
+class CP_sparse_degree(nn.Module):
+    def __init__(self, degree, d, k, o):
+        super(CP_sparse_degree, self).__init__()        
+     
+        self.input_dimension = d 
+        self.rank = k
+        self.output_dimension = o 
+        self.degree = int(degree)
+        masks = ut.generate_masks(self.degree, self.rank, self.input_dimension)
+        for i in range(1, self.degree + 1):
+            setattr(self, 'U{}'.format(i), nn.Parameter(nn.Linear(d, k, bias=False).weight * masks[i-1]))
+            self.register_buffer('mask{}'.format(i), masks[i-1])        
+
+        self.layer_C = nn.Linear(self.rank, self.output_dimension) 
+
+
+    def forward(self, z):
+        z = z.reshape(-1, self.input_dimension)
+        out = torch.matmul(z, (self.mask1 * self.U1).T)
+        for i in range(2, self.degree + 1):
+            #out = getattr(self, 'U{}'.format(i))(z) * out + out
+            out = torch.matmul(z, (getattr(self, 'mask{}'.format(i)) * getattr(self, 'U{}'.format(i))).T) * out + out
         x = self.layer_C(out)
         return x
 

@@ -1,6 +1,11 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from torch.utils.data import random_split
+from torch.utils.data import DataLoader
+from Cuda import DeviceDataLoader
+import sys, inspect
+from sklearn.preprocessing import MinMaxScaler
 
 def MLP_model(in_dim, out_dim):
     model = nn.Sequential(
@@ -32,17 +37,6 @@ def training_regression(epochs, dimension, model, optimizer, device, loss_fn, tr
         list_of_epochs.append(epoch + 1)
         print('loss', loss)
         print("Epoch : ", epoch + 1)
-
-def generate_dataset_uqtf(test_function, N, target_scaler):
-    xx_sample_dom_1 = -1 + 2 * np.random.rand(N, test_function.spatial_dimension)
-    xx_sample = test_function.transform_sample(xx_sample_dom_1)
-    yy_sample = test_function(xx_sample)
-    target_scaler.fit(yy_sample.reshape(-1,1))
-    yy_sample = target_scaler.transform(yy_sample.reshape(-1,1))
-    input_tensor  = torch.tensor(xx_sample_dom_1, dtype=torch.float32)
-    target =  torch.tensor(yy_sample, dtype=torch.float32)
-    dataset = torch.cat((input_tensor, target), 1)
-    return dataset, target_scaler
 
 
 def non_zero_count(model):
@@ -96,7 +90,7 @@ def fit(epochs, lr, model, train_loader, val_loader, opt_func=torch.optim.SGD):
         # Validation phase
         losses.append(loss)
         result = evaluate(model, val_loader)
-        model.epoch_end(epoch, loss, result)
+        #model.epoch_end(epoch, loss, result)
         history.append(result)
 
     return history, losses
@@ -106,19 +100,20 @@ def evaluate(model, val_loader):
     return model.validation_epoch_end(outputs)
 
 class Regression(nn.Module):
-    def __init__(self, model, input_dim, loss_fn):
+    def __init__(self, model, loss_fn):
         super(Regression, self).__init__()
         
         self.model = model
-        self.input_dimension = int(input_dim)
+        self.input_dimension = model.input_dimension
         self.loss_function = loss_fn
 
     def forward(self, z):
         x = self.model(z)
         return x
     
+    
     def training_step(self, batch):
-        input, target = batch[:, :self.input_dimension], batch[:, self.input_dimension:] 
+        input, target = batch[:, :-1], batch[:, -1:] 
         out = self(input)                  # Generate predictions
         loss = self.loss_function(out, target) # Calculate loss
         return loss
@@ -203,3 +198,184 @@ def multi_indices_net_Cheby(sparse_mi, DEGREE):
             mi_s = mi_s1
 
     return mi_s
+
+def generate_masks(degree, rank, in_dim):
+    Masks = [torch.ones(rank, in_dim)]
+    steps = []
+    for i in range(0, degree - 1):
+        M = torch.ones(rank, in_dim)
+        r = torch.arange(i, rank, degree) 
+        steps = steps + [r]
+        M[torch.cat(steps, 0)] = 0
+        Masks = Masks + [M]
+    return Masks
+
+def Norm_param(k, d):
+    P = abs(nn.Linear(d, k, bias = False).weight.detach().to(torch.float32))
+    P_sum = torch.sum(P, dim=1)
+    P_norm = P/P_sum.reshape(-1,1)
+    return P_norm
+
+
+def Norm_param2(k, d):
+    P = torch.ones(k,d)
+    P_sum = torch.sum(P, dim=1)
+    P_norm = P/P_sum.reshape(-1,1)
+    return P_norm
+
+def orthogonality_test_legendre(model1, model2, points, weights):
+    return torch.dot((model1(points) * model2(points))[:,0], weights)
+
+def orthogonality_test_chebyshev(model1, model2,  points, weights):
+    return torch.dot((model1(points) * model2(points))[:,0] , weights)
+
+def integral(model, points, weights):
+    return torch.dot(model(points)[:,0], weights)
+
+def orthogonal_matrix_legendre(models, points, weights):
+    n = len(models)
+    matrix = torch.zeros(n,n)
+    for i in range(n):
+        for j in range(n):
+            matrix[i,j] = orthogonality_test_legendre(models[i], models[j], points, weights)
+    return matrix
+
+def orthogonal_matrix_chebyshev(models, points, weights):
+    n = len(models)
+    matrix = torch.zeros(n,n)
+    for i in range(n):
+        for j in range(n):
+            matrix[i,j] = orthogonality_test_chebyshev(models[i], models[j], points, weights)
+    return matrix
+
+def round_matrix(matrix, threshold):
+    mask1 = matrix > threshold
+    mask2 = matrix < -threshold
+    mask3 =  (mask1 | mask2) 
+    matrix1 = mask3 * matrix
+    return matrix1
+
+def eval_at_one(models):
+    one = torch.ones(1, models[0].input_dimension)
+    return torch.tensor([i(one) for i in models])
+
+def weight_matrix_k4s2(image_size):
+    
+    kernel_width = 16
+    kernel_height = kernel_width
+    image_width = image_size
+    image_height = image_width
+    stride = 2
+    width_steps = int((image_width - kernel_width)/stride)
+    height_steps = int((image_height - kernel_height)/stride)
+
+    base = torch.arange(0, kernel_width)
+    base_new = base.repeat(kernel_height)
+    addition = torch.arange(0, kernel_width) * image_width
+    addition_new  = addition.repeat_interleave(kernel_height)
+    index_1 = addition_new + base_new
+
+    index_width = index_1.repeat(width_steps + 1)
+    addition_width = stride * torch.arange(0, width_steps + 1)
+    addition_width = addition_width.repeat_interleave(kernel_height * kernel_width)
+    index_row = index_width + addition_width
+
+    index_column = index_row.repeat(height_steps + 1)
+    addition_height = stride * image_width * torch.arange(0, height_steps + 1)
+    addition_height_rep = addition_height.repeat_interleave(kernel_height * kernel_width * (height_steps + 1))
+    index_final = index_column + addition_height_rep
+
+    stack = torch.arange(0, (height_steps + 1) * (width_steps + 1)).repeat_interleave(kernel_height * kernel_width)
+    indices = torch.stack((stack, index_final), dim=1)
+
+    W_in = image_height * image_width
+    W_out = (height_steps + 1) * (width_steps + 1)
+    #print(W_out, W_in)
+    W = torch.zeros([W_out, W_in], dtype=torch.float32)
+    values = torch.nn.Linear(indices.shape[0], 1).weight.to(torch.float32)[0]
+    W = W.index_put_(tuple(indices.t()), values)
+
+    mask = torch.zeros([W_out, W_in], dtype=torch.float32)
+    values_m = torch.ones_like(values)
+    mask = mask.index_put_(tuple(indices.t()), values_m)
+
+    return W, mask
+
+def generate_data(N, IN_DIM, f):
+    sample_domain = -1 + 2 * np.random.rand(N, IN_DIM) 
+    input_tensor  = torch.tensor(sample_domain.reshape(-1,IN_DIM), dtype=torch.float32)
+    target =  torch.tensor(f(sample_domain), dtype=torch.float32).reshape(-1,1)
+    dataset = torch.cat((input_tensor, target), 1)
+    #dataset = torch.tensor(torch.cat((torch.from_numpy(sample_domain).float(), torch.from_numpy(f).float())))
+    return dataset
+
+def generate_dataset_uqtf(test_function, N, target_scaler):
+    xx_sample_dom_1 = -1 + 2 * np.random.rand(N, test_function.spatial_dimension)
+    xx_sample = test_function.transform_sample(xx_sample_dom_1)
+    yy_sample = test_function(xx_sample)
+    target_scaler.fit(yy_sample.reshape(-1,1))
+    yy_sample = target_scaler.transform(yy_sample.reshape(-1,1))
+    input_tensor  = torch.tensor(xx_sample_dom_1, dtype=torch.float32)
+    target =  torch.tensor(yy_sample, dtype=torch.float32)
+    dataset = torch.cat((input_tensor, target), 1)
+    return dataset, target_scaler
+
+def data_split(dataset, train):
+    N = len(dataset)
+    N_t = int(N * train)
+    N_v = N - N_t
+    train_ds, val_ds = random_split(dataset, [N_t, N_v])
+    return train_ds, val_ds
+
+def eval_model(model, test_dataset):
+    model = model.to('cpu').eval()
+    outputs = model(test_dataset[:, :-1]).to('cpu').detach()
+    return outputs
+
+def create_loaders(N, in_dim, test_function, batch_size, device, split=0.9):
+    dataset = generate_data(N, in_dim, test_function)
+    train_ds, val_ds = data_split(dataset, split)
+    train_loader = DeviceDataLoader(DataLoader(train_ds, batch_size, shuffle=True), device)
+    val_loader = DeviceDataLoader(DataLoader(val_ds, batch_size), device)
+    return train_loader, val_loader
+
+def create_loaders_uqtf(N, test_function, batch_size, device, split=0.9, target_scaler=MinMaxScaler()):
+    dataset, target_scaler = generate_dataset_uqtf(test_function, N, target_scaler)
+    train_ds, val_ds = data_split(dataset, split)
+    train_loader = DeviceDataLoader(DataLoader(train_ds, batch_size, shuffle=True), device)
+    val_loader = DeviceDataLoader(DataLoader(val_ds, batch_size), device)
+    return train_loader, val_loader
+
+def train_model(NUM_EPOCHS, LEARNING_RATE, model, train_loader, val_loader, test_dataset, loss_fn, opt_func=torch.optim.Rprop, seed = 44):
+    
+    history, losses = fit(NUM_EPOCHS, LEARNING_RATE, model, train_loader, val_loader, opt_func)
+    np.random.seed(seed)
+    #test_dataset = ut.generate_data(N, IN_DIM, tf.runge2D)
+    outputs = eval_model(model, test_dataset)
+    test_target = test_dataset[:, -1:].to('cpu').detach()
+    mse = loss_fn(outputs, test_target).detach().item()
+    l_inf = torch.max(abs(outputs-test_target)).item()
+
+    return model, history, losses, mse, l_inf
+
+def train_model_uqtf(NUM_EPOCHS, LEARNING_RATE, model, train_loader, val_loader, test_dataset, target_scaler, loss_fn, opt_func=torch.optim.Rprop, seed = 44):
+    
+    history, losses = fit(NUM_EPOCHS, LEARNING_RATE, model, train_loader, val_loader, opt_func)
+    np.random.seed(seed)
+    #test_dataset = ut.generate_data(N, IN_DIM, tf.runge2D)
+    outputs = eval_model(model, test_dataset)
+    outputs = torch.tensor(target_scaler.inverse_transform(outputs))
+    test_target = test_dataset[:, -1:].to('cpu').detach()
+    test_target = torch.tensor(target_scaler.inverse_transform(test_target) )
+    mse = loss_fn(outputs, test_target).detach().item()
+    l_inf = torch.max(abs(outputs-test_target)).item()
+
+    return model, history, losses, mse, l_inf
+
+def get_models(module, arguments, device):
+    classes = [cls_name for cls_name, cls_obj in inspect.getmembers(sys.modules[module]) if inspect.isclass(cls_obj)]
+    return [getattr(sys.modules[module], i)(*arguments).to(device) for i in classes], classes
+
+def get_functions(module):
+    functions = [cls_name for cls_name, cls_obj in inspect.getmembers(sys.modules[module]) if inspect.isfunction(cls_obj)]
+    return [getattr(sys.modules[module], i) for i in functions], functions
